@@ -175,15 +175,33 @@ def collect_gstreamer_plugins():
 def collect_locales():
     """Collect compiled locale files for translations."""
     locales = []
-    locale_dir = os.path.join(PROJECT_ROOT, 'locale')
+    
+    # Get the locale directory from project root (one level up from windows/)
+    spec_dir = os.path.dirname(os.path.abspath(SPEC))
+    project_root = os.path.dirname(spec_dir)
+    locale_dir = os.path.join(project_root, 'locale')
+    
+    print(f"[PyInstaller] Looking for locales in: {locale_dir}")
+    print(f"[PyInstaller] Locale directory exists: {os.path.exists(locale_dir)}")
     
     if os.path.exists(locale_dir):
         for lang in os.listdir(locale_dir):
-            mo_file = os.path.join(locale_dir, lang, 'LC_MESSAGES', 'high-tide.mo')
+            lang_dir = os.path.join(locale_dir, lang)
+            # Skip if not a directory
+            if not os.path.isdir(lang_dir):
+                continue
+            
+            mo_file = os.path.join(lang_dir, 'LC_MESSAGES', 'high-tide.mo')
+            print(f"[PyInstaller] Checking {lang}: {mo_file} exists={os.path.exists(mo_file)}")
+            
             if os.path.exists(mo_file):
                 # Keep the directory structure: locale/<lang>/LC_MESSAGES/high-tide.mo
                 locales.append((mo_file, os.path.join('locale', lang, 'LC_MESSAGES')))
+                print(f"[PyInstaller] ✓ Added locale: {lang}")
+    else:
+        print(f"[PyInstaller] WARNING: Locale directory not found!")
     
+    print(f"[PyInstaller] Total locales collected: {len(locales)}")
     return locales
 
 ICON_PATH = find_icon()
