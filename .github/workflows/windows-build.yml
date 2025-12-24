@@ -78,7 +78,8 @@ jobs:
       - name: Install Python packages
         shell: msys2 {0}
         run: |
-          pip install tidalapi pypresence
+          # Ensure runtime dependencies are present for tray icon and Windows features
+          pip install tidalapi pypresence pystray pillow winsdk
           pip install cairosvg --break-system-packages
 
       - name: Build with Meson

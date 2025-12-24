@@ -631,6 +631,11 @@ def get_image_url(item: Any, dimensions: int = 320) -> str | None:
     Returns:
         str: Path to the local image file, or None if download failed
     """
+    # Defensive checks
+    if item is None:
+        logger.debug("get_image_url called with item=None")
+        return None
+
     if hasattr(item, "id"):
         file_path = Path(f"{IMG_DIR}/{item.id}_{dimensions}.jpg")
     else:
@@ -640,18 +645,31 @@ def get_image_url(item: Any, dimensions: int = 320) -> str | None:
         return str(file_path)
 
     try:
-        picture_url = item.image(dimensions=dimensions)
-        response = requests.get(picture_url)
+        image_callable = getattr(item, "image", None)
+        if not callable(image_callable):
+            logger.warning("Item has no callable 'image' attribute")
+            return None
+
+        picture_url = image_callable(dimensions=dimensions)
+        if not picture_url:
+            logger.warning("Image method returned no URL")
+            return None
+
+        response = requests.get(picture_url, timeout=10)
+        response.raise_for_status()
     except Exception:
         logger.exception("Could not get image")
         return None
-    if response.status_code == 200:
-        picture_data = response.content
 
+    # Save only on success
+    try:
+        picture_data = response.content
         with open(file_path, "wb") as file:
             file.write(picture_data)
-
-    return str(file_path)
+        return str(file_path)
+    except Exception:
+        logger.exception("Failed to write image to disk")
+        return None
 
 
 def add_picture(
@@ -671,7 +689,7 @@ def add_picture(
         cancellable = Gio.Cancellable.new()
 
     def _add_picture(widget, file_path, cancellable):
-        if not cancellable.is_cancelled():
+        if not cancellable.is_cancelled() and file_path:
             widget.set_filename(file_path)
 
     GLib.idle_add(
@@ -698,7 +716,7 @@ def add_image(
     def _add_image(
         widget: Any, file_path: str | None, cancellable: Gio.Cancellable
     ) -> None:
-        if not cancellable.is_cancelled():
+        if not cancellable.is_cancelled() and file_path:
             widget.set_from_file(file_path)
 
     GLib.idle_add(_add_image, widget, get_image_url(item), cancellable)
@@ -714,6 +732,11 @@ def get_video_cover_url(item: Any, dimensions: int = 320) -> str | None:
     Returns:
         str: Path to the local video file, or None if download failed
     """
+    # Defensive checks
+    if item is None:
+        logger.debug("get_video_cover_url called with item=None")
+        return None
+
     if hasattr(item, "id"):
         file_path = Path(f"{IMG_DIR}/{item.id}_{dimensions}.mp4")
     else:
@@ -723,18 +746,30 @@ def get_video_cover_url(item: Any, dimensions: int = 320) -> str | None:
         return str(file_path)
 
     try:
-        video_url = item.video(dimensions=dimensions)
-        response = requests.get(video_url)
+        video_callable = getattr(item, "video", None)
+        if not callable(video_callable):
+            logger.warning("Item has no callable 'video' attribute")
+            return None
+
+        video_url = video_callable(dimensions=dimensions)
+        if not video_url:
+            logger.warning("Video method returned no URL")
+            return None
+
+        response = requests.get(video_url, timeout=10)
+        response.raise_for_status()
     except Exception:
         logger.exception("Could not get video")
         return None
-    if response.status_code == 200:
-        picture_data = response.content
 
+    try:
+        video_data = response.content
         with open(file_path, "wb") as file:
-            file.write(picture_data)
-
-    return str(file_path)
+            file.write(video_data)
+        return str(file_path)
+    except Exception:
+        logger.exception("Failed to write video to disk")
+        return None
 
 
 def add_video_cover(
@@ -797,10 +832,10 @@ def add_image_to_avatar(
     def _add_image_to_avatar(
         avatar_widget: Any, file_path: str | None, cancellable: Gio.Cancellable
     ) -> None:
-        if not cancellable.is_cancelled():
+        if not cancellable.is_cancelled() and file_path:
             file = Gio.File.new_for_path(file_path)
             image = Gdk.Texture.new_from_file(file)
-            widget.set_custom_image(image)
+            avatar_widget.set_custom_image(image)
 
     GLib.idle_add(_add_image_to_avatar, widget, get_image_url(item), cancellable)
 
@@ -860,3 +895,9 @@ def setup_logging():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=handlers,
     )
+
+    # Reduce noisy warnings from tidalapi.page (e.g., unimplemented item types like DEEP_LINK)
+    try:
+        logging.getLogger("tidalapi.page").setLevel(logging.ERROR)
+    except Exception:
+        pass

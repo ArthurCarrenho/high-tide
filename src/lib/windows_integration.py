@@ -47,7 +47,7 @@ if IS_WINDOWS:
         HAS_PYSTRAY = True
     except ImportError:
         HAS_PYSTRAY = False
-        logger.warning("pystray or Pillow not found, system tray icon disabled")
+        logger.info("pystray or Pillow not found, system tray icon disabled")
     
     try:
         # Windows Runtime for System Media Transport Controls
@@ -57,7 +57,7 @@ if IS_WINDOWS:
         HAS_WINSDK = True
     except ImportError:
         HAS_WINSDK = False
-        logger.warning("winsdk not found, Windows media controls disabled")
+        logger.info("winsdk not found, Windows media controls disabled")
     
     try:
         from win10toast import ToastNotifier
@@ -152,7 +152,7 @@ class WindowsTrayIcon:
             bool: True if started successfully, False otherwise
         """
         if not HAS_PYSTRAY:
-            logger.warning("Cannot start tray icon: pystray not available")
+            logger.info("pystray not available; system tray icon disabled")
             return False
             
         try:
