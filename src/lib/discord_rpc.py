@@ -102,13 +102,13 @@ def set_activity(track: Track | None = None, offset_ms: int = 0) -> None:
             rpc.update(
                 activity_type=pypresence.ActivityType.LISTENING,
                 details="High Tide",
-                state="TIDAL gnome client",
+                state="TIDAL Windows client",
                 large_image="hightide_x1024",
-                large_text="High Tide",
+                large_text="High Tide for Windows",
                 buttons=[
                     {
                         "label": "Get High Tide",
-                        "url": "https://github.com/nokse22/high-tide",
+                        "url": "https://github.com/ArthurCarrenho/high-tide",
                     }
                 ],
             )
@@ -139,7 +139,7 @@ def set_activity(track: Track | None = None, offset_ms: int = 0) -> None:
                 large_image=track.album.image() if track.album else "hightide_x1024",
                 large_text=track.album.name if track.album else "High Tide",
                 small_image="hightide_x1024" if track.album else None,
-                small_text="High Tide" if track.album else None,
+                small_text="High Tide for Windows" if track.album else None,
                 start=int(time.time() * 1_000 - offset_ms),
                 end=int(time.time() * 1_000 - offset_ms + track.duration * 1_000)
                 if track.duration
@@ -148,7 +148,7 @@ def set_activity(track: Track | None = None, offset_ms: int = 0) -> None:
                     {"label": "Listen to this song", "url": f"{track.share_url}?u"},
                     {
                         "label": "Get High Tide",
-                        "url": "https://github.com/nokse22/high-tide",
+                        "url": "https://github.com/ArthurCarrenho/high-tide",
                     },
                 ],
             )

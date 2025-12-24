@@ -26,7 +26,7 @@
       <default>0</default>
     </key>
 	  <key name="preferred-sink" type="i">
-	    <range min="0" max="6"/>
+	    <range min="0" max="7"/>
       <default>0</default>
     </key>
 	  <key name="run-background" type="b">
@@ -49,6 +49,11 @@
     </key>
 	  <key name="alsa-device" type="s">
       <default>'default'</default>
+    </key>
+    <key name="language" type="s">
+      <default>''</default>
+      <summary>UI Language</summary>
+      <description>Language code for the user interface (empty = system default)</description>
     </key>
 	</schema>
 </schemalist>

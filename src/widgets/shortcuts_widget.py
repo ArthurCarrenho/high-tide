@@ -18,7 +18,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import threading
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 from typing import List, Union
 
 from gi.repository import GLib, Gtk

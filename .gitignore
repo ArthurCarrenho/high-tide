@@ -1,7 +1,27 @@
 _build/
+build/
+dist/
+builddir/
 .flatpak/
 node_modules/
 .mypy_cache
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Windows build artifacts
+windows/build/
+windows/dist/
+data/gschemas.compiled
+locale/
+*.ico
+*.spec.bak
+
+# PyInstaller
+*.manifest
+*.spec.tmp
 
 # local flatpak build
 /repo
@@ -9,4 +29,4 @@ node_modules/
 /build-aux/repo
 /build-aux/.flatpak-builder/
 
-/subprojects/blueprint-compiler
+/subprojects/*

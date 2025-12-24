@@ -12,6 +12,7 @@
 # Copyright (c) 2023 Nokse22
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from pathlib import Path
 from random import randint
 
 from gi.repository import Gdk, Gio, GLib
@@ -338,7 +339,8 @@ class MPRIS(Server):
         )
 
         # 320 px should always be fetched for example by queue logic
-        url = f"file://{utils.IMG_DIR}/{self.player.playing_track.album.id}_320.jpg"
+        art_path = Path(utils.IMG_DIR, f"{self.player.playing_track.album.id}_320.jpg")
+        url = art_path.as_uri()
 
         self.__metadata["mpris:artUrl"] = GLib.Variant("s", url)
 

@@ -17,14 +17,24 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import platform
 import sys
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 from typing import Any, Callable, List
 
 from gi.repository import Adw, Gio, Gtk
 
 from .lib import utils
 from .lib.player_object import AudioSink
+from .lib.windows_integration import (
+    IS_WINDOWS,
+    is_startup_enabled,
+    set_startup_enabled,
+    is_protocol_handler_registered,
+    register_protocol_handler,
+    unregister_protocol_handler,
+)
 from .window import HighTideWindow
 
 
@@ -88,24 +98,26 @@ class HighTideApplication(Adw.Application):
     def on_about_action(self, widget: Any, *args) -> None:
         """Display the about dialog with application information"""
         about = Adw.AboutDialog(
-            application_name="High Tide",
+            application_name="High Tide for Windows",
             application_icon="io.github.nokse22.high-tide",
-            developer_name="The High Tide Contributors",
+            developer_name="ArthurCarrenho",
             version="1.1.0",
             developers=[
+                "ArthurCarrenho https://github.com/ArthurCarrenho",
                 "Nokse https://github.com/Nokse22",
                 "Nila The Dragon https://github.com/nilathedragon",
                 "Dråfølin https://github.com/drafolin",
                 "Plamper https://github.com/Plamper",
             ],
-            copyright="© 2023-2025 Nokse",
+            copyright="© 2023-2025 Nokse, Windows port © 2025 ArthurCarrenho",
             license_type="GTK_LICENSE_GPL_3_0",
-            issue_url="https://github.com/Nokse22/high-tide/issues",
-            website="https://github.com/Nokse22/high-tide",
+            issue_url="https://github.com/ArthurCarrenho/high-tide/issues",
+            website="https://github.com/ArthurCarrenho/high-tide",
         )
 
-        about.add_link(_("Donate with Ko-Fi"), "https://ko-fi.com/nokse22")
-        about.add_link(_("Donate with Github"), "https://github.com/sponsors/Nokse22")
+        about.add_link(_("Upstream Project"), "https://github.com/Nokse22/high-tide")
+        about.add_link(_("Donate to Nokse (Ko-Fi)"), "https://ko-fi.com/nokse22")
+        about.add_link(_("Donate to Nokse (Github)"), "https://github.com/sponsors/Nokse22")
 
         about.set_support_url("https://matrix.to/#/%23high-tide:matrix.org")
 
@@ -132,6 +144,29 @@ class HighTideApplication(Adw.Application):
             builder.get_object("_sink_row").connect(
                 "notify::selected", self.on_sink_changed
             )
+
+            # Configure audio sink options based on platform
+            if platform.system() == "Windows":
+                # Replace the Linux sink options with Windows-specific ones
+                sink_row = builder.get_object("_sink_row")
+                # Create Windows audio sink model: Auto, WASAPI, DirectSound
+                windows_sinks = Gtk.StringList.new([
+                    _("Automatic"),
+                    "WASAPI",
+                    "DirectSound",
+                ])
+                sink_row.set_model(windows_sinks)
+                sink_row.set_subtitle(_("WASAPI provides lower latency, DirectSound has better compatibility."))
+                
+                # Map stored preference to Windows sink index
+                stored_sink = self.settings.get_int("preferred-sink")
+                # 0=Auto, 6=WASAPI, 7=DirectSound (from AudioSink enum)
+                if stored_sink == 6:  # WASAPI
+                    sink_row.set_selected(1)
+                elif stored_sink == 7:  # DirectSound
+                    sink_row.set_selected(2)
+                else:
+                    sink_row.set_selected(0)  # Auto
 
             bg_row: Gtk.Widget = builder.get_object("_background_row")
             bg_row.set_active(self.settings.get_boolean("run-background"))
@@ -169,50 +204,58 @@ class HighTideApplication(Adw.Application):
 
             self.alsa_row = builder.get_object("_alsa_device_row")
 
-            # Create a new label factory to just set max_width
-            # Idk how to add the tickmark back
-            factory = Gtk.SignalListItemFactory()
+            # Hide ALSA device selection on Windows (not applicable)
+            if platform.system() == "Windows":
+                self.alsa_row.set_visible(False)
+            else:
+                # Create a new label factory to just set max_width
+                # Idk how to add the tickmark back
+                factory = Gtk.SignalListItemFactory()
 
-            def setup(factory, list_item):
-                label = Gtk.Label(xalign=0)
-                label.set_width_chars(1)
-                list_item.set_child(label)
+                def setup(factory, list_item):
+                    label = Gtk.Label(xalign=0)
+                    label.set_width_chars(1)
+                    list_item.set_child(label)
 
-            def bind(factory, list_item):
-                label = list_item.get_child()
-                string_obj = list_item.get_item()
-                label.set_text(string_obj.get_string())
+                def bind(factory, list_item):
+                    label = list_item.get_child()
+                    string_obj = list_item.get_item()
+                    label.set_text(string_obj.get_string())
 
-            factory.connect("setup", setup)
-            factory.connect("bind", bind)
+                factory.connect("setup", setup)
+                factory.connect("bind", bind)
 
-            self.alsa_row.set_factory(factory)
+                self.alsa_row.set_factory(factory)
 
-            names = Gtk.StringList.new([d["name"] for d in self.alsa_devices])
-            self.alsa_row.set_model(names)
+                names = Gtk.StringList.new([d["name"] for d in self.alsa_devices])
+                self.alsa_row.set_model(names)
 
-            last_used_device = self.settings.get_string("alsa-device")
+                last_used_device = self.settings.get_string("alsa-device")
 
-            selected_index = next(
-                (
-                    i
-                    for i, d in enumerate(self.alsa_devices)
-                    if d["hw_device"] == last_used_device
-                ),
-                0,
-            )
-            self.alsa_row.set_selected(selected_index)
-            builder.get_object("_alsa_device_row").set_selected(selected_index)
-            self.alsa_row.connect("notify::selected", self.on_alsa_device_changed)
+                selected_index = next(
+                    (
+                        i
+                        for i, d in enumerate(self.alsa_devices)
+                        if d["hw_device"] == last_used_device
+                    ),
+                    0,
+                )
+                self.alsa_row.set_selected(selected_index)
+                builder.get_object("_alsa_device_row").set_selected(selected_index)
+                self.alsa_row.connect("notify::selected", self.on_alsa_device_changed)
 
-            alsa_used = AudioSink.ALSA == self.settings.get_int("preferred-sink")
-            self.alsa_row.set_sensitive(alsa_used)
-            if not alsa_used:
-                self.alsa_row.set_selected(0)
+                alsa_used = AudioSink.ALSA == self.settings.get_int("preferred-sink")
+                self.alsa_row.set_sensitive(alsa_used)
+                if not alsa_used:
+                    self.alsa_row.set_selected(0)
 
-            builder.get_object("_sink_row").connect(
-                "notify::selected-item", self.deactive_alsa_device_row
-            )
+                builder.get_object("_sink_row").connect(
+                    "notify::selected-item", self.deactive_alsa_device_row
+                )
+
+            # Add Windows-specific preferences
+            if IS_WINDOWS:
+                self._add_windows_preferences(builder)
 
             self.preferences = builder.get_object("_preference_window")
 
@@ -222,7 +265,22 @@ class HighTideApplication(Adw.Application):
         self.win.select_quality(widget.get_selected())
 
     def on_sink_changed(self, widget: Any, *args) -> None:
-        self.win.change_audio_sink(widget.get_selected())
+        selected = widget.get_selected()
+        
+        # Map Windows sink UI indices to AudioSink enum values
+        if platform.system() == "Windows":
+            # UI: 0=Auto, 1=WASAPI, 2=DirectSound
+            # Enum: 0=AUTO, 6=WASAPI, 7=DIRECTSOUND
+            windows_sink_map = {
+                0: AudioSink.AUTO,
+                1: AudioSink.WASAPI,
+                2: AudioSink.DIRECTSOUND,
+            }
+            sink_value = windows_sink_map.get(selected, AudioSink.AUTO)
+            self.win.change_audio_sink(sink_value)
+        else:
+            # Linux: UI indices match AudioSink enum directly
+            self.win.change_audio_sink(selected)
 
     def on_alsa_device_changed(self, widget: Any, *args) -> None:
         index = widget.get_selected()
@@ -246,6 +304,103 @@ class HighTideApplication(Adw.Application):
         self.alsa_row.set_sensitive(alsa_used)
         if not alsa_used:
             self.alsa_row.set_selected(0)
+
+    def _add_windows_preferences(self, builder: Gtk.Builder) -> None:
+        """Add Windows-specific preferences to the preferences dialog."""
+        # Get the preferences page to add a new group
+        pref_dialog = builder.get_object("_preference_window")
+        
+        # Create a new preferences group for Windows settings
+        windows_group = Adw.PreferencesGroup(
+            title=_("Windows"),
+            description=_("Windows-specific settings"),
+        )
+        
+        # Language selector
+        language_row = Adw.ComboRow(
+            title=_("Language"),
+            subtitle=_("Requires restart to take effect"),
+        )
+        
+        # Available languages (code, display name)
+        self._languages = [
+            ("", _("System Default")),
+            ("en", "English"),
+            ("de", "Deutsch"),
+            ("es", "Español"),
+            ("fr", "Français"),
+            ("it", "Italiano"),
+            ("nl", "Nederlands"),
+            ("pl", "Polski"),
+            ("pt_BR", "Português (Brasil)"),
+            ("zh_TW", "中文 (台灣)"),
+        ]
+        
+        language_names = Gtk.StringList.new([name for _code, name in self._languages])
+        language_row.set_model(language_names)
+        
+        # Set current selection based on stored setting
+        current_lang = self.settings.get_string("language")
+        selected_idx = 0
+        for i, (code, _name) in enumerate(self._languages):
+            if code == current_lang:
+                selected_idx = i
+                break
+        language_row.set_selected(selected_idx)
+        language_row.connect("notify::selected", self._on_language_changed)
+        windows_group.add(language_row)
+        
+        # Run at startup switch
+        startup_row = Adw.SwitchRow(
+            title=_("Run at Windows startup"),
+            subtitle=_("Start High Tide automatically when you log in"),
+        )
+        startup_row.set_active(is_startup_enabled())
+        startup_row.connect("notify::active", self._on_startup_toggled)
+        windows_group.add(startup_row)
+        
+        # Register tidal:// protocol handler
+        protocol_row = Adw.SwitchRow(
+            title=_("Handle tidal:// links"),
+            subtitle=_("Open TIDAL links from your browser in High Tide"),
+        )
+        protocol_row.set_active(is_protocol_handler_registered())
+        protocol_row.connect("notify::active", self._on_protocol_toggled)
+        windows_group.add(protocol_row)
+        
+        # Add the group to the first (and only) page
+        # We need to find the preferences page
+        first_page = pref_dialog.get_visible_page()
+        if first_page:
+            first_page.add(windows_group)
+
+    def _on_language_changed(self, widget: Adw.ComboRow, *args) -> None:
+        """Handle language selection change."""
+        selected_idx = widget.get_selected()
+        lang_code = self._languages[selected_idx][0]
+        self.settings.set_string("language", lang_code)
+        utils.send_toast(_("Language will change after restart"), 3)
+
+    def _on_startup_toggled(self, widget: Adw.SwitchRow, *args) -> None:
+        """Handle the startup toggle."""
+        enabled = widget.get_active()
+        if not set_startup_enabled(enabled):
+            # Failed to set, revert the toggle
+            widget.set_active(not enabled)
+            utils.send_toast(_("Failed to update startup setting"), 3)
+
+    def _on_protocol_toggled(self, widget: Adw.SwitchRow, *args) -> None:
+        """Handle the protocol handler toggle."""
+        enabled = widget.get_active()
+        if enabled:
+            success = register_protocol_handler()
+        else:
+            success = unregister_protocol_handler()
+        
+        if not success:
+            # Failed to set, revert the toggle
+            widget.set_active(not enabled)
+            utils.send_toast(_("Failed to update protocol handler"), 3)
 
     def create_action(
         self, name: str, callback: Callable, shortcuts: List[str] | None = None

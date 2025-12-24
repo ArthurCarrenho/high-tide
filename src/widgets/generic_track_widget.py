@@ -19,7 +19,8 @@
 
 
 import threading
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 
 from gi.repository import Gio, GLib, GObject, Gtk
 from tidalapi import UserPlaylist

@@ -18,13 +18,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import html
+import json
 import os
+import platform
 import re
 import subprocess
 import threading
 import uuid
 import logging
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 from pathlib import Path
 from typing import Any, List
 
@@ -53,11 +56,23 @@ def init() -> None:
     and initializes the global cache object for TIDAL API responses.
     """
     global CACHE_DIR
-    CACHE_DIR = os.environ.get("XDG_CACHE_HOME")
-    if CACHE_DIR == "" or CACHE_DIR is None or "high-tide" not in CACHE_DIR:
-        CACHE_DIR = f"{os.environ.get('HOME')}/.cache/high-tide"
+    
+    if platform.system() == "Windows":
+        # Use LOCALAPPDATA on Windows (e.g., C:\Users\<user>\AppData\Local)
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            CACHE_DIR = os.path.join(local_app_data, "high-tide", "cache")
+        else:
+            # Fallback to user profile directory
+            CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "high-tide")
+    else:
+        # Unix-like systems (Linux, macOS)
+        CACHE_DIR = os.environ.get("XDG_CACHE_HOME")
+        if CACHE_DIR == "" or CACHE_DIR is None or "high-tide" not in CACHE_DIR:
+            CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "high-tide")
+    
     global IMG_DIR
-    IMG_DIR = f"{CACHE_DIR}/images"
+    IMG_DIR = os.path.join(CACHE_DIR, "images")
 
     if not os.path.exists(IMG_DIR):
         os.makedirs(IMG_DIR)
@@ -72,7 +87,10 @@ def init() -> None:
 
 
 def get_alsa_devices() -> List[dict]:
-    """Get ALSA devices"""
+    """Get audio devices (ALSA on Linux, or default device on Windows)"""
+    if platform.system() == "Windows":
+        return get_windows_audio_devices()
+    
     try:
         alsa_devices = get_alsa_devices_from_aplay()
     except (
@@ -82,6 +100,57 @@ def get_alsa_devices() -> List[dict]:
     ):
         alsa_devices = get_alsa_devices_from_proc()
     return alsa_devices
+
+
+def get_windows_audio_devices() -> List[dict]:
+    """Get audio devices on Windows using PowerShell.
+    
+    Returns a list of audio output devices available on the system.
+    """
+    devices = [
+        {
+            "hw_device": "default",
+            "name": _("Default"),
+        }
+    ]
+    
+    try:
+        # Use PowerShell to get audio devices via Windows Audio API
+        ps_command = (
+            "Get-CimInstance -Namespace root/cimv2 -ClassName Win32_SoundDevice | "
+            "Select-Object -Property DeviceID, Name, Status | "
+            "Where-Object { $_.Status -eq 'OK' } | "
+            "ConvertTo-Json"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            import json
+            audio_devices = json.loads(result.stdout)
+            
+            # Handle single device (returns dict) vs multiple (returns list)
+            if isinstance(audio_devices, dict):
+                audio_devices = [audio_devices]
+            
+            for device in audio_devices:
+                device_id = device.get("DeviceID", "")
+                device_name = device.get("Name", _("Unknown Device"))
+                devices.append({
+                    "hw_device": device_id,
+                    "name": device_name,
+                })
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        logger.exception("Could not enumerate Windows audio devices")
+    except Exception:
+        logger.exception("Unexpected error getting Windows audio devices")
+    
+    return devices
 
 
 def get_alsa_devices_from_aplay() -> List[dict]:
@@ -783,7 +852,7 @@ def setup_logging():
 
     handlers = []
     if log_to_file:
-        handlers.append(logging.FileHandler(CACHE_DIR + "/high-tide.log"))
+        handlers.append(logging.FileHandler(os.path.join(CACHE_DIR, "high-tide.log")))
     handlers.append(logging.StreamHandler())
 
     logging.basicConfig(

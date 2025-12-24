@@ -18,10 +18,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import logging
+import platform
 import random
 import threading
 from enum import IntEnum
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 from pathlib import Path
 from typing import Any, List, Union
 
@@ -47,6 +49,8 @@ class AudioSink(IntEnum):
     JACK = 3
     OSS = 4
     PIPEWIRE = 5
+    WASAPI = 6       # Windows Audio Session API
+    DIRECTSOUND = 7  # DirectSound (Windows legacy)
 
 
 class PlayerObject(GObject.GObject):
@@ -175,6 +179,20 @@ class PlayerObject(GObject.GObject):
 
     def _setup_audio_sink(self, sink_type: AudioSink) -> None:
         """Configure the audio sink using parse_launch for simplicity."""
+        # On Windows, check which sinks are actually available
+        if platform.system() == "Windows":
+            if sink_type == AudioSink.AUTO:
+                # Try WASAPI first, fall back to DirectSound
+                if Gst.ElementFactory.find("wasapisink"):
+                    sink_type = AudioSink.WASAPI
+                else:
+                    sink_type = AudioSink.DIRECTSOUND
+            elif sink_type == AudioSink.WASAPI:
+                # Check if WASAPI is available
+                if not Gst.ElementFactory.find("wasapisink"):
+                    logger.warning("WASAPI sink not available, falling back to DirectSound")
+                    sink_type = AudioSink.DIRECTSOUND
+
         sink_map = {
             AudioSink.AUTO: "autoaudiosink",
             AudioSink.PULSE: "pulsesink",
@@ -182,9 +200,16 @@ class PlayerObject(GObject.GObject):
             AudioSink.JACK: "jackaudiosink",
             AudioSink.OSS: "osssink",
             AudioSink.PIPEWIRE: "pipewiresink",
+            AudioSink.WASAPI: "wasapisink",
+            AudioSink.DIRECTSOUND: "directsoundsink",
         }
 
         sink_name = sink_map.get(sink_type, "autoaudiosink")
+        
+        # Verify the sink element exists before trying to use it
+        if not Gst.ElementFactory.find(sink_name.split()[0]):
+            logger.warning(f"Sink {sink_name} not found, falling back to autoaudiosink")
+            sink_name = "autoaudiosink"
 
         # add normalization to pipeline if set by settings
         normalization = ""
@@ -471,7 +496,8 @@ class PlayerObject(GObject.GObject):
                     with open(mpd_path, "w") as file:
                         file.write(data)
 
-                    music_url = "file://{}".format(mpd_path)
+                    # Use as_uri() for proper file:// URI format on all platforms
+                    music_url = mpd_path.as_uri()
                 else:
                     raise AttributeError("No MPD manifest available!")
             elif self.stream.manifest_mime_type == ManifestMimeType.BTS:

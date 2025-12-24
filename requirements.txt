@@ -1,0 +1,17 @@
+# High Tide - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+tidalapi>=0.7.0
+requests>=2.28.0
+PyGObject>=3.42.0
+
+# Optional: Windows system tray icon
+pystray>=0.19.0
+Pillow>=9.0.0
+
+# Optional: Windows toast notifications
+win10toast>=0.9
+
+# Optional: Discord Rich Presence
+pypresence>=4.0.0

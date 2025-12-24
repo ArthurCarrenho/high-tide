@@ -1,0 +1,232 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      debug_only:
+        description: 'Build debug versions only'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  APP_NAME: HighTide
+  APP_VERSION: '1.1.0'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - build_type: release
+            console: 'False'
+            suffix: ''
+          - build_type: debug
+            console: 'True'
+            suffix: '-debug'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-python-gobject
+            mingw-w64-x86_64-python-cairo
+            mingw-w64-x86_64-python-requests
+            mingw-w64-x86_64-python-pillow
+            mingw-w64-x86_64-python-dateutil
+            mingw-w64-x86_64-python-certifi
+            mingw-w64-x86_64-python-six
+            mingw-w64-x86_64-gstreamer
+            mingw-w64-x86_64-gst-plugins-base
+            mingw-w64-x86_64-gst-plugins-good
+            mingw-w64-x86_64-gst-plugins-bad
+            mingw-w64-x86_64-gst-plugins-ugly
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-blueprint-compiler
+            mingw-w64-x86_64-gettext-tools
+            mingw-w64-x86_64-pyinstaller
+            git
+
+      - name: Install Python packages
+        shell: msys2 {0}
+        run: |
+          pip install tidalapi pystray cairosvg pypresence winsdk
+
+      - name: Build with Meson
+        shell: msys2 {0}
+        run: |
+          meson setup builddir
+          meson compile -C builddir
+
+      - name: Compile GSettings schemas
+        shell: msys2 {0}
+        run: |
+          glib-compile-schemas data/
+
+      - name: Compile locale files
+        shell: msys2 {0}
+        run: |
+          mkdir -p locale
+          for lang in $(cat po/LINGUAS); do
+            mkdir -p "locale/$lang/LC_MESSAGES"
+            if [ -f "po/$lang.po" ]; then
+              msgfmt -o "locale/$lang/LC_MESSAGES/high-tide.mo" "po/$lang.po"
+              echo "Compiled: $lang"
+            fi
+          done
+
+      - name: Create Windows icon
+        shell: msys2 {0}
+        run: |
+          python -c "
+          from PIL import Image
+          import os
+          png_path = 'data/icons/hicolor/256x256/apps/io.github.nokse22.high-tide.png'
+          ico_path = 'data/icons/hicolor/256x256/apps/io.github.nokse22.high-tide.ico'
+          if os.path.exists(png_path) and not os.path.exists(ico_path):
+              img = Image.open(png_path)
+              img.save(ico_path, format='ICO', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])
+              print(f'Created icon: {ico_path}')
+          elif os.path.exists(ico_path):
+              print(f'Icon already exists: {ico_path}')
+          "
+
+      - name: Update PyInstaller spec for ${{ matrix.build_type }}
+        shell: msys2 {0}
+        run: |
+          # Update console setting in spec file
+          sed -i 's/console=True/console=${{ matrix.console }}/g' windows/high-tide.spec
+          sed -i 's/console=False/console=${{ matrix.console }}/g' windows/high-tide.spec
+
+      - name: Build with PyInstaller
+        shell: msys2 {0}
+        run: |
+          cd windows
+          pyinstaller --noconfirm high-tide.spec
+          
+          # Copy additional resources
+          echo "Copying GStreamer plugins..."
+          mkdir -p dist/HighTide/gst_plugins
+          cp -f /mingw64/lib/gstreamer-1.0/libgstcoreelements.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstaudioconvert.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstaudioresample.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstplayback.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstautodetect.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstdirectsound.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstwasapi.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstwasapi2.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgsttypefindfunctions.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstaudioparsers.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstmpg123.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstflac.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstogg.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstvorbis.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstopus.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstdash.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstsoup.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstadaptivedemux2.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstisomp4.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstgio.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstvolume.dll dist/HighTide/gst_plugins/ || true
+          cp -f /mingw64/lib/gstreamer-1.0/libgstapp.dll dist/HighTide/gst_plugins/ || true
+          
+          echo "Copying Adwaita icons..."
+          mkdir -p dist/HighTide/share/icons
+          cp -r /mingw64/share/icons/Adwaita dist/HighTide/share/icons/ || true
+
+      - name: Move dist to project root
+        shell: pwsh
+        run: |
+          if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+          Move-Item -Path "windows/dist" -Destination "dist"
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $zipName = "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Windows-Portable${{ matrix.suffix }}.zip"
+          Compress-Archive -Path "dist/HighTide/*" -DestinationPath "dist/$zipName" -Force
+          echo "Created: dist/$zipName"
+
+      - name: Install Inno Setup
+        if: matrix.build_type == 'release' || github.event.inputs.debug_only != 'true'
+        shell: pwsh
+        run: |
+          choco install innosetup -y
+
+      - name: Build Installer
+        if: matrix.build_type == 'release' || github.event.inputs.debug_only != 'true'
+        shell: pwsh
+        run: |
+          # Update version in installer script
+          $issContent = Get-Content "windows/installer.iss" -Raw
+          $issContent = $issContent -replace '#define MyAppVersion ".*"', '#define MyAppVersion "${{ env.APP_VERSION }}"'
+          
+          # Add suffix for debug builds
+          if ("${{ matrix.suffix }}" -ne "") {
+            $issContent = $issContent -replace 'OutputBaseFilename=HighTide-\{#MyAppVersion\}-Setup', 'OutputBaseFilename=HighTide-{#MyAppVersion}-Setup${{ matrix.suffix }}'
+          }
+          
+          Set-Content "windows/installer.iss" -Value $issContent
+          
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "windows\installer.iss"
+
+      - name: Upload Portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-Portable${{ matrix.suffix }}
+          path: dist/${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Windows-Portable${{ matrix.suffix }}.zip
+          if-no-files-found: error
+
+      - name: Upload Installer
+        if: matrix.build_type == 'release' || github.event.inputs.debug_only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-Installer${{ matrix.suffix }}
+          path: dist/${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Setup${{ matrix.suffix }}.exe
+          if-no-files-found: warn
+
+  # Create release with all artifacts
+  release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.exe
+          draft: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

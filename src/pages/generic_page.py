@@ -17,7 +17,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 
 from gi.repository import Gtk
 from tidalapi import Track
@@ -65,7 +66,7 @@ class HTGenericPage(Page):
         if self.page.title:
             self.set_title(self.page.title)
         else:
-            self.set_title("")
+            self.set_title("High Tide")
 
         for index, category in enumerate(self.page.categories):
             if isinstance(category, TrackList) or all(

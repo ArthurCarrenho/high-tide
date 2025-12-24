@@ -19,7 +19,8 @@
 
 import logging
 import threading
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 from typing import List
 
 from gi.repository import GLib, Gtk

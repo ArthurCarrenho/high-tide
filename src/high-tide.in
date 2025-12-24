@@ -24,6 +24,7 @@ import sys
 import signal
 import locale
 import gettext
+import platform
 
 VERSION = '@VERSION@'
 pkgdatadir = '@pkgdatadir@'
@@ -31,8 +32,14 @@ localedir = '@localedir@'
 
 sys.path.insert(1, pkgdatadir)
 signal.signal(signal.SIGINT, signal.SIG_DFL)
-locale.bindtextdomain('high-tide', localedir)
-locale.textdomain('high-tide')
+
+# Windows Fix: Check if bindtextdomain exists before running it
+try:
+    locale.bindtextdomain('high-tide', localedir)
+    locale.textdomain('high-tide')
+except AttributeError:
+    pass
+
 gettext.bindtextdomain('high-tide', localedir)
 gettext.textdomain('high-tide')
 gettext.install('high-tide', localedir)

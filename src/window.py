@@ -17,17 +17,28 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import platform
 import threading
-from gettext import gettext as _
+import builtins
+def _(message): return getattr(builtins, '_', lambda x: x)(message)
 from typing import Callable
 
 import tidalapi
-from gi.repository import Adw, Gio, GLib, GObject, Gst, Gtk, Xdp
+from gi.repository import Adw, Gio, GLib, GObject, Gst, Gtk
 from tidalapi import Quality
 
 from .lib import HTCache, PlayerObject, RepeatType, SecretStore, utils
+from .lib.windows_integration import (
+    IS_WINDOWS,
+    WindowsTrayIcon,
+    WindowsMediaControls,
+    get_missing_plugins_message,
+    set_tray_icon,
+    get_notifications,
+)
 from .login import LoginDialog
-from .mpris import MPRIS
+if platform.system() != "Windows":
+    from .mpris import MPRIS
 from .pages import (HTAlbumPage, HTArtistPage, HTCollectionPage, HTExplorePage,
                     HTGenericPage, HTMixPage, HTNotLoggedInPage,
                     HTPlaylistPage)
@@ -210,11 +221,20 @@ class HighTideWindow(Adw.ApplicationWindow):
 
         threading.Thread(target=self.th_login, args=()).start()
 
-        MPRIS(self.player_object)
+        # MPRIS is only available on Linux/Unix (uses D-Bus)
+        if platform.system() != "Windows":
+            MPRIS(self.player_object)
 
-        self.portal = Xdp.Portal()
-
-        self.portal.set_background_status(_("Playing Music"))
+        # Windows system tray icon
+        self._windows_tray_icon = None
+        self._windows_media_controls = None
+        if IS_WINDOWS:
+            self._setup_windows_tray_icon()
+            self._setup_windows_media_controls()
+            # Check for missing GStreamer plugins on Windows
+            missing_plugins_msg = get_missing_plugins_message()
+            if missing_plugins_msg:
+                logger.warning(missing_plugins_msg)
 
         self.connect("notify::is-active", self.stop_video_in_background)
 
@@ -244,6 +264,11 @@ class HighTideWindow(Adw.ApplicationWindow):
         login_dialog.present(self)
 
     def th_login(self):
+        if not self.secret_store.has_credentials():
+            logger.info("No stored credentials found")
+            GLib.idle_add(self.on_login_failed)
+            return
+
         try:
             self.session.load_oauth_session(
                 self.secret_store.token_dictionary["token-type"],
@@ -301,6 +326,11 @@ class HighTideWindow(Adw.ApplicationWindow):
 
         logger.info(f"Last playing: {thing_id} of type {thing_type} index: {index}")
 
+        # No last playing song saved
+        if not thing_id or not thing_type:
+            logger.info("No last playing song to restore")
+            return
+
         thing = None
 
         try:
@@ -314,10 +344,99 @@ class HighTideWindow(Adw.ApplicationWindow):
                 thing = self.session.track(thing_id)
         except Exception:
             logger.exception("Error while setting last played song")
+            return
+
+        if thing is None:
+            logger.info("Could not restore last playing song")
+            return
 
         self.player_object.play_this(thing, index)
 
         self.player_object.pause()
+
+    def _setup_windows_tray_icon(self):
+        """Set up the Windows system tray icon with playback controls."""
+        def on_show():
+            # Use GLib.idle_add to ensure we're on the GTK main thread
+            GLib.idle_add(self.present)
+
+        def on_play_pause():
+            GLib.idle_add(self.player_object.play_pause)
+
+        def on_next():
+            GLib.idle_add(self.player_object.play_next)
+
+        def on_previous():
+            GLib.idle_add(self.player_object.play_previous)
+
+        def on_quit():
+            GLib.idle_add(self.get_application().quit)
+
+        self._windows_tray_icon = WindowsTrayIcon(
+            on_show=on_show,
+            on_play_pause=on_play_pause,
+            on_next=on_next,
+            on_previous=on_previous,
+            on_quit=on_quit,
+        )
+
+        # Try to use the app icon if available
+        icon_path = None
+        try:
+            # Look for icon in common locations
+            import os
+            possible_paths = [
+                os.path.join(os.path.dirname(__file__), "..", "data", "icons", "hicolor", "scalable", "apps", "io.github.nokse22.high-tide.svg"),
+                os.path.join(os.path.dirname(__file__), "..", "data", "icons", "hicolor", "256x256", "apps", "io.github.nokse22.high-tide.png"),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    icon_path = path
+                    break
+        except Exception:
+            pass
+
+        if self._windows_tray_icon.start(icon_path):
+            set_tray_icon(self._windows_tray_icon)
+            logger.info("Windows tray icon initialized")
+        else:
+            logger.warning("Failed to initialize Windows tray icon")
+            self._windows_tray_icon = None
+
+    def _setup_windows_media_controls(self):
+        """Set up Windows System Media Transport Controls (SMTC)."""
+        def on_play():
+            GLib.idle_add(self.player_object.play)
+
+        def on_pause():
+            GLib.idle_add(self.player_object.pause)
+
+        def on_play_pause():
+            GLib.idle_add(self.player_object.play_pause)
+
+        def on_next():
+            GLib.idle_add(self.player_object.play_next)
+
+        def on_previous():
+            GLib.idle_add(self.player_object.play_previous)
+
+        def on_stop():
+            GLib.idle_add(self.player_object.pause)
+
+        self._windows_media_controls = WindowsMediaControls(
+            on_play=on_play,
+            on_pause=on_pause,
+            on_play_pause=on_play_pause,
+            on_next=on_next,
+            on_previous=on_previous,
+            on_stop=on_stop,
+        )
+
+        if self._windows_media_controls.initialize():
+            logger.info("Windows Media Controls (SMTC) initialized")
+        else:
+            logger.info("Windows Media Controls not available - media keys may not work")
+            self._windows_media_controls = None
 
     #
     #   UPDATES UI
@@ -396,6 +515,50 @@ class HighTideWindow(Adw.ApplicationWindow):
             self.queue_widget_updated = True
         else:
             self.queue_widget_updated = False
+
+        # Update Windows tray icon with current track info
+        if self._windows_tray_icon and track:
+            artist_name = track.artist.name if track.artist else ""
+            self._windows_tray_icon.update_state(
+                is_playing=self.player_object.playing,
+                title=track_name,
+                artist=artist_name
+            )
+
+        # Update Windows SMTC with current track info
+        if self._windows_media_controls and track:
+            artist_name = track.artist.name if track.artist else ""
+            album_name = album.name if album else ""
+            duration_ms = int(track.duration * 1000) if hasattr(track, 'duration') else 0
+            
+            # Get album art path for SMTC thumbnail
+            thumbnail_path = ""
+            if album:
+                try:
+                    thumbnail_path = utils.get_image_url(album, 320) or ""
+                except Exception:
+                    pass
+            
+            self._windows_media_controls.update_metadata(
+                title=track_name,
+                artist=artist_name,
+                album=album_name,
+                thumbnail_path=thumbnail_path,
+                duration_ms=duration_ms,
+            )
+            self._windows_media_controls.update_playback_status(self.player_object.playing)
+
+        # Show Windows notification when app is in background
+        if IS_WINDOWS and self.in_background and track:
+            artist_name = track.artist.name if track.artist else ""
+            album_name = album.name if album else ""
+            notifications = get_notifications()
+            notifications.show_now_playing(
+                title=track_name,
+                artist=artist_name,
+                album=album_name,
+                track_id=str(track.id),
+            )
 
     def save_last_playing_thing(self):
         """Save the current playing context to settings for persistence.
@@ -483,6 +646,22 @@ class HighTideWindow(Adw.ApplicationWindow):
             self.play_button.set_icon_name("media-playback-pause-symbolic")
         else:
             self.play_button.set_icon_name("media-playback-start-symbolic")
+
+        # Update Windows tray icon play state
+        if self._windows_tray_icon:
+            track = self.player_object.playing_track
+            if track:
+                track_name = track.full_name if hasattr(track, "full_name") else track.name
+                artist_name = track.artist.name if track.artist else ""
+                self._windows_tray_icon.update_state(
+                    is_playing=self.player_object.playing,
+                    title=track_name,
+                    artist=artist_name
+                )
+
+        # Update Windows SMTC play state
+        if self._windows_media_controls:
+            self._windows_media_controls.update_playback_status(self.player_object.playing)
 
     def update_repeat_button(self, player, repeat_type):
         """Update the repeat button icon based on current repeat mode"""
