@@ -197,7 +197,7 @@ def collect_locales():
             if os.path.exists(mo_file):
                 # Keep the directory structure: locale/<lang>/LC_MESSAGES/high-tide.mo
                 locales.append((mo_file, os.path.join('locale', lang, 'LC_MESSAGES')))
-                print(f"[PyInstaller] ✓ Added locale: {lang}")
+                print(f"[PyInstaller] Added locale: {lang}")
     else:
         print(f"[PyInstaller] WARNING: Locale directory not found!")
     
