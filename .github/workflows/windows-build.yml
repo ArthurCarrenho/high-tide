@@ -58,6 +58,7 @@ jobs:
             mingw-w64-x86_64-python-certifi
             mingw-w64-x86_64-python-six
             mingw-w64-x86_64-python-winsdk
+            mingw-w64-x86_64-python-cffi
             mingw-w64-x86_64-gstreamer
             mingw-w64-x86_64-gst-plugins-base
             mingw-w64-x86_64-gst-plugins-good
@@ -75,7 +76,7 @@ jobs:
       - name: Install Python packages
         shell: msys2 {0}
         run: |
-          pip install tidalapi pystray cairosvg pypresence winsdk
+          pip install tidalapi pypresence
 
       - name: Build with Meson
         shell: msys2 {0}
