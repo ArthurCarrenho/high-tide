@@ -78,6 +78,7 @@ jobs:
         shell: msys2 {0}
         run: |
           pip install tidalapi pypresence
+          pip install cairosvg --break-system-packages
 
       - name: Build with Meson
         shell: msys2 {0}
