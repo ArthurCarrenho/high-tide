@@ -4,20 +4,20 @@ on:
   push:
     branches: [main, master]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
     branches: [main, master]
   workflow_dispatch:
     inputs:
       debug_only:
-        description: 'Build debug versions only'
+        description: "Build debug versions only"
         required: false
         default: false
         type: boolean
 
 env:
   APP_NAME: HighTide
-  APP_VERSION: '1.1.0'
+  APP_VERSION: "1.1.0"
 
 jobs:
   build-windows:
@@ -26,12 +26,12 @@ jobs:
       matrix:
         include:
           - build_type: release
-            console: 'False'
-            suffix: ''
+            console: "False"
+            suffix: ""
           - build_type: debug
-            console: 'True'
-            suffix: '-debug'
-    
+            console: "True"
+            suffix: "-debug"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,6 +42,10 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-cmake
+            base-devel
             mingw-w64-x86_64-gtk4
             mingw-w64-x86_64-libadwaita
             mingw-w64-x86_64-python
@@ -123,7 +127,7 @@ jobs:
         run: |
           cd windows
           pyinstaller --noconfirm high-tide.spec
-          
+
           # Copy additional resources
           echo "Copying GStreamer plugins..."
           mkdir -p dist/HighTide/gst_plugins
@@ -149,7 +153,7 @@ jobs:
           cp -f /mingw64/lib/gstreamer-1.0/libgstgio.dll dist/HighTide/gst_plugins/ || true
           cp -f /mingw64/lib/gstreamer-1.0/libgstvolume.dll dist/HighTide/gst_plugins/ || true
           cp -f /mingw64/lib/gstreamer-1.0/libgstapp.dll dist/HighTide/gst_plugins/ || true
-          
+
           echo "Copying Adwaita icons..."
           mkdir -p dist/HighTide/share/icons
           cp -r /mingw64/share/icons/Adwaita dist/HighTide/share/icons/ || true
@@ -180,14 +184,14 @@ jobs:
           # Update version in installer script
           $issContent = Get-Content "windows/installer.iss" -Raw
           $issContent = $issContent -replace '#define MyAppVersion ".*"', '#define MyAppVersion "${{ env.APP_VERSION }}"'
-          
+
           # Add suffix for debug builds
           if ("${{ matrix.suffix }}" -ne "") {
             $issContent = $issContent -replace 'OutputBaseFilename=HighTide-\{#MyAppVersion\}-Setup', 'OutputBaseFilename=HighTide-{#MyAppVersion}-Setup${{ matrix.suffix }}'
           }
-          
+
           Set-Content "windows/installer.iss" -Value $issContent
-          
+
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "windows\installer.iss"
 
       - name: Upload Portable ZIP
@@ -210,7 +214,7 @@ jobs:
     needs: build-windows
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4

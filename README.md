@@ -28,7 +28,7 @@
 
 > [!NOTE]
 > This is a Windows port of [High Tide](https://github.com/Nokse22/high-tide) by [@ArthurCarrenho](https://github.com/ArthurCarrenho).
-> For the original Linux version, please visit the [upstream repository](https://github.com/Nokse22/high-tide).
+> For the original Linux version by @Nokse22(https://github.com/Nokse22), please visit the [upstream repository](https://github.com/Nokse22/high-tide).
 
 <table>
   <tr>
