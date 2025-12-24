@@ -5,8 +5,6 @@ on:
     branches: [main, master]
     tags:
       - "v*"
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
     inputs:
       debug_only:
@@ -19,28 +17,42 @@ env:
   APP_NAME: HighTide
   APP_VERSION: "1.1.0"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
-  build-windows:
+  # ===========================================
+  # Job 1: Build - Compile and prepare assets
+  # ===========================================
+  build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - build_type: release
-            console: "False"
-            suffix: ""
-          - build_type: debug
-            console: "True"
-            suffix: "-debug"
+    outputs:
+      artifact_version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Determine artifact version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -match "^refs/tags/v(.+)$") {
+            $version = $Matches[1]
+            Write-Host "Tag detected, using version: $version"
+          } else {
+            $version = "${{ github.sha }}".Substring(0, 7)
+            Write-Host "Commit detected, using short SHA: $version"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
+          cache: true
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-make
@@ -60,26 +72,17 @@ jobs:
             mingw-w64-x86_64-python-six
             mingw-w64-x86_64-python-winsdk
             mingw-w64-x86_64-python-cffi
-            mingw-w64-x86_64-gstreamer
-            mingw-w64-x86_64-gst-plugins-base
-            mingw-w64-x86_64-gst-plugins-good
-            mingw-w64-x86_64-gst-plugins-bad
-            mingw-w64-x86_64-gst-plugins-ugly
             mingw-w64-x86_64-glib2
-            mingw-w64-x86_64-libsecret
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-blueprint-compiler
             mingw-w64-x86_64-gettext-tools
-            mingw-w64-x86_64-pyinstaller
             git
 
       - name: Install Python packages
         shell: msys2 {0}
         run: |
-          # Ensure runtime dependencies are present for tray icon and Windows features
-          pip install tidalapi pypresence pystray pillow winsdk
           pip install cairosvg --break-system-packages
 
       - name: Build with Meson
@@ -99,9 +102,7 @@ jobs:
           mkdir -p locale
           echo "Starting locale compilation..."
           while IFS= read -r lang || [ -n "$lang" ]; do
-            # Skip empty lines and comments
             [[ -z "$lang" || "$lang" =~ ^[[:space:]]*# ]] && continue
-            # Trim whitespace
             lang=$(echo "$lang" | xargs)
             mkdir -p "locale/$lang/LC_MESSAGES"
             if [ -f "po/$lang.po" ]; then
@@ -111,8 +112,7 @@ jobs:
               echo "✗ Missing: po/$lang.po"
             fi
           done < po/LINGUAS
-          echo "Locale compilation complete. Files created:"
-          find locale -name "*.mo" -type f
+          echo "Locale compilation complete."
 
       - name: Create Windows icon
         shell: msys2 {0}
@@ -121,22 +121,18 @@ jobs:
           from PIL import Image
           import cairosvg
           import os
-          import io
 
           svg_path = 'data/icons/io.github.nokse22.high-tide.Source.svg'
           ico_dir = 'data/icons/hicolor/256x256/apps'
           png_path = os.path.join(ico_dir, 'io.github.nokse22.high-tide.png')
           ico_path = os.path.join(ico_dir, 'io.github.nokse22.high-tide.ico')
 
-          # Create directory
           os.makedirs(ico_dir, exist_ok=True)
 
-          # Convert SVG to PNG first
           if not os.path.exists(png_path):
-              print(f'Converting SVG to PNG:  {svg_path} -> {png_path}')
+              print(f'Converting SVG to PNG: {svg_path} -> {png_path}')
               cairosvg.svg2png(url=svg_path, write_to=png_path, output_width=256, output_height=256)
 
-          # Convert PNG to ICO
           if os.path.exists(png_path):
               print(f'Converting PNG to ICO: {png_path} -> {ico_path}')
               img = Image.open(png_path)
@@ -147,25 +143,87 @@ jobs:
               exit(1)
           "
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-intermediate
+          path: |
+            src/
+            data/
+            locale/
+            windows/
+            builddir/
+            po/
+            meson.build
+            meson_options.txt
+          retention-days: 1
+          if-no-files-found: error
+
+  # ===========================================
+  # Job 2: Package - Create release/debug builds
+  # ===========================================
+  package:
+    needs: build
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - build_type: release
+            console: "False"
+            suffix: ""
+          - build_type: debug
+            console: "True"
+            suffix: "-debug"
+
+    env:
+      ARTIFACT_VERSION: ${{ needs.build.outputs.artifact_version }}
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-intermediate
+          path: .
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          cache: true
+          install: >-
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-pip
+            mingw-w64-x86_64-python-gobject
+            mingw-w64-x86_64-python-cairo
+            mingw-w64-x86_64-python-pillow
+            mingw-w64-x86_64-python-requests
+            mingw-w64-x86_64-python-dateutil
+            mingw-w64-x86_64-python-certifi
+            mingw-w64-x86_64-python-six
+            mingw-w64-x86_64-python-winsdk
+            mingw-w64-x86_64-python-cffi
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-gstreamer
+            mingw-w64-x86_64-gst-plugins-base
+            mingw-w64-x86_64-gst-plugins-good
+            mingw-w64-x86_64-gst-plugins-bad
+            mingw-w64-x86_64-gst-plugins-ugly
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-libsecret
+            mingw-w64-x86_64-pyinstaller
+
+      - name: Install Python packages
+        shell: msys2 {0}
+        run: |
+          pip install tidalapi pypresence pystray pillow winsdk
+
       - name: Update PyInstaller spec for ${{ matrix.build_type }}
         shell: msys2 {0}
         run: |
-          # Update console setting in spec file
           sed -i 's/console=True/console=${{ matrix.console }}/g' windows/high-tide.spec
           sed -i 's/console=False/console=${{ matrix.console }}/g' windows/high-tide.spec
-
-      - name: Verify locales before PyInstaller
-        shell: msys2 {0}
-        run: |
-          echo "=== Verifying locale files before PyInstaller ==="
-          echo "Current directory: $(pwd)"
-          echo "Locale directory exists: $(test -d locale && echo 'YES' || echo 'NO')"
-          if [ -d locale ]; then
-            echo "Locale subdirectories:"
-            ls -la locale/
-            echo "All .mo files:"
-            find locale -name "*.mo" -type f
-          fi
 
       - name: Build with PyInstaller
         shell: msys2 {0}
@@ -173,49 +231,23 @@ jobs:
           cd windows
           pyinstaller --noconfirm high-tide.spec
 
-          # Copy additional resources
+          # Copy GStreamer plugins
           echo "Copying GStreamer plugins..."
           mkdir -p dist/HighTide/gst_plugins
-          cp -f /mingw64/lib/gstreamer-1.0/libgstcoreelements.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstaudioconvert.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstaudioresample.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstplayback.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstautodetect.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstdirectsound.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstwasapi.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstwasapi2.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgsttypefindfunctions.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstaudioparsers.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstmpg123.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstflac.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstogg.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstvorbis.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstopus.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstdash.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstsoup.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstadaptivedemux2.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstisomp4.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstgio.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstvolume.dll dist/HighTide/gst_plugins/ || true
-          cp -f /mingw64/lib/gstreamer-1.0/libgstapp.dll dist/HighTide/gst_plugins/ || true
+          GST_PLUGINS=(
+            coreelements audioconvert audioresample playback autodetect
+            directsound wasapi wasapi2 typefindfunctions audioparsers
+            mpg123 flac ogg vorbis opus dash soup adaptivedemux2
+            isomp4 gio volume app
+          )
+          for plugin in "${GST_PLUGINS[@]}"; do
+            cp -f "/mingw64/lib/gstreamer-1.0/libgst${plugin}.dll" dist/HighTide/gst_plugins/ 2>/dev/null || true
+          done
 
+          # Copy Adwaita icons
           echo "Copying Adwaita icons..."
           mkdir -p dist/HighTide/share/icons
           cp -r /mingw64/share/icons/Adwaita dist/HighTide/share/icons/ || true
-
-      - name: Verify locales in dist
-        shell: msys2 {0}
-        run: |
-          cd windows
-          echo "=== Verifying locales in PyInstaller dist ==="
-          if [ -d "dist/HighTide/_internal/locale" ]; then
-            echo "Locale directories in dist:"
-            ls -la dist/HighTide/_internal/locale/
-            echo "All .mo files in dist:"
-            find dist/HighTide/_internal/locale -name "*.mo" -type f
-          else
-            echo "ERROR: No locale directory in dist!"
-          fi
 
       - name: Move dist to project root
         shell: pwsh
@@ -223,12 +255,12 @@ jobs:
           if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
           Move-Item -Path "windows/dist" -Destination "dist"
 
-      - name: Create portable ZIP
-        shell: pwsh
-        run: |
-          $zipName = "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Windows-Portable${{ matrix.suffix }}.zip"
-          Compress-Archive -Path "dist/HighTide/*" -DestinationPath "dist/$zipName" -Force
-          echo "Created: dist/$zipName"
+      - name: Upload Portable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.ARTIFACT_VERSION }}-Windows-Portable${{ matrix.suffix }}
+          path: dist/HighTide
+          if-no-files-found: error
 
       - name: Install Inno Setup
         if: matrix.build_type == 'release' || github.event.inputs.debug_only != 'true'
@@ -240,37 +272,29 @@ jobs:
         if: matrix.build_type == 'release' || github.event.inputs.debug_only != 'true'
         shell: pwsh
         run: |
-          # Update version in installer script
           $issContent = Get-Content "windows/installer.iss" -Raw
           $issContent = $issContent -replace '#define MyAppVersion ".*"', '#define MyAppVersion "${{ env.APP_VERSION }}"'
 
-          # Add suffix for debug builds
           if ("${{ matrix.suffix }}" -ne "") {
             $issContent = $issContent -replace 'OutputBaseFilename=HighTide-\{#MyAppVersion\}-Setup', 'OutputBaseFilename=HighTide-{#MyAppVersion}-Setup${{ matrix.suffix }}'
           }
 
           Set-Content "windows/installer.iss" -Value $issContent
-
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "windows\installer.iss"
-
-      - name: Upload Portable ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-Portable${{ matrix.suffix }}
-          path: dist/${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Windows-Portable${{ matrix.suffix }}.zip
-          if-no-files-found: error
 
       - name: Upload Installer
         if: matrix.build_type == 'release' || github.event.inputs.debug_only != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-Installer${{ matrix.suffix }}
+          name: ${{ env.APP_NAME }}-${{ env.ARTIFACT_VERSION }}-Installer${{ matrix.suffix }}
           path: dist/${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Setup${{ matrix.suffix }}.exe
           if-no-files-found: warn
 
-  # Create release with all artifacts
+  # ===========================================
+  # Job 3: Release - Create GitHub release
+  # ===========================================
   release:
-    needs: build-windows
+    needs: package
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -279,6 +303,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Remove intermediate build artifact
+        run: rm -rf artifacts/build-intermediate
 
       - name: List artifacts
         run: find artifacts -type f
