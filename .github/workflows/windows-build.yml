@@ -156,6 +156,7 @@ jobs:
             po/
             meson.build
             meson_options.txt
+            COPYING
           retention-days: 1
           if-no-files-found: error
 
